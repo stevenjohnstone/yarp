@@ -13,6 +13,13 @@ all: build/librubyparser.$(SOEXT)
 build/librubyparser.$(SOEXT): $(shell find src -name '*.c') $(shell find src -name '*.h') Makefile build include/yarp/ast.h
 	$(CC) $(DEBUG_FLAGS) $(CFLAGS) $(DEFS) -Wall -Werror -Wextra -Wpedantic -Wsign-conversion -fPIC -g -fvisibility=hidden -shared -Iinclude -o $@ $(shell find src -name '*.c')
 
+build/bugs: $(shell find bugs -name '*.c')  Makefile build include/yarp/ast.h
+	clang -fsanitize=address -mllvm -asan-instrument-reads=false -O0 -fno-omit-frame-pointer -ggdb -std=c99 -Iinclude -o $@.heapoverflow $(shell find src -name '*.c') bugs/unescape.heapoverflow.c
+	clang -fsanitize=address -mllvm -asan-instrument-reads=false -O0 -fno-omit-frame-pointer -ggdb -std=c99 -Iinclude -o $@.double-free $(shell find src -name '*.c') bugs/unescape.double-free.c
+	clang -fsanitize=address -mllvm -asan-instrument-reads=false -O0 -fno-omit-frame-pointer -ggdb -std=c99 -Iinclude -o $@.segfault $(shell find src -name '*.c') bugs/unescape.segfault.c
+	clang -fsanitize=address -mllvm -asan-instrument-reads=false -O0 -fno-omit-frame-pointer -ggdb -std=c99 -Iinclude -o $@.use-after-free $(shell find src -name '*.c') bugs/parse.use-after-free.c
+	clang -fsanitize=address -mllvm -asan-instrument-reads=false -O0 -fno-omit-frame-pointer -ggdb -std=c99 -Iinclude -o $@.hang $(shell find src -name '*.c') bugs/parse.hang.c
+
 build:
 	mkdir -p build
 
