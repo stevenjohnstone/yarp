@@ -59,36 +59,53 @@ build/static/%.o: src/%.c Makefile $(HEADERS)
 	$(Q) $(MAKEDIRS) $(@D)
 	$(Q) $(CC) $(DEBUG_FLAGS) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
-build/fuzz.%: $(SOURCES) fuzz/%.c fuzz/fuzz.c
-	$(ECHO) "building $* fuzzer"
+build/fuzz.parse: $(SOURCES) fuzz/parse.c fuzz/fuzz.c
 	$(Q) $(MAKEDIRS) $(@D)
 	$(ECHO) "building main fuzz binary"
 	$(Q) afl-clang-lto $(DEBUG_FLAGS) $(CPPFLAGS) $(CFLAGS) $(FUZZ_FLAGS) -fsanitize=fuzzer,address -ggdb3 -std=c99 -Iinclude -o $@ $^
 	$(ECHO) "building with no instrumented reads"
 	$(Q) afl-clang-lto $(DEBUG_FLAGS) $(CPPFLAGS) $(CFLAGS) $(FUZZ_FLAGS) -mllvm -asan-instrument-reads=false -fsanitize=fuzzer,address -ggdb3 -std=c99 -Iinclude -o $@.noread $^
+	$(ECHO) "building with UBSAN"
+	$(Q) AFL_USE_UBSAN=1 AFL_UBSAN_VERBOSE=1 afl-clang-lto $(DEBUG_FLAGS) $(CPPFLAGS) $(CFLAGS) $(FUZZ_FLAGS) -DIGNORE_ASSERTS -fsanitize=fuzzer,undefined -ggdb3 -std=c99 -Iinclude -o $@.ubsan $^
 	$(ECHO) "building cmplog binary"
 	$(Q) AFL_LLVM_CMPLOG=1 afl-clang-lto $(DEBUG_FLAGS) $(CPPFLAGS) $(CFLAGS) $(FUZZ_FLAGS) -fsanitize=fuzzer,address -ggdb3 -std=c99 -Iinclude -o $@.cmplog $^
 
-fuzz-debug: FORCE fuzz-docker-build
+FUZZ_DOCKER_STAMP := ./build/.fuzz.docker.stamp
+
+fuzz-docker-build: $(FUZZ_DOCKER_STAMP)
+	$(ECHO) "Docker image is up to date"
+
+$(FUZZ_DOCKER_STAMP): fuzz/docker/Dockerfile Gemfile Gemfile.lock prism.gemspec
+	$(ECHO) "building docker image"
+	$(Q) docker build -t prism/fuzz -f fuzz/docker/Dockerfile .
+	$(Q) $(MAKEDIRS) build
+	$(Q) touch $@
+
+fuzz-debug: fuzz-docker-build
 	$(ECHO) "entering debug shell"
 	$(Q) docker run -it --rm -e HISTFILE=/prism/fuzz/output/.bash_history -v $(CURDIR):/prism -v $(FUZZ_OUTPUT_DIR):/fuzz_output prism/fuzz
 
-fuzz-triage: FORCE fuzz-docker-build
+fuzz-triage: fuzz-docker-build
 	$(ECHO) "starting triage -- may take a long time"
 	$(Q) docker run -it --rm -e HISTFILE=/prism/fuzz/output/.bash_history -v $(CURDIR):/prism -v $(FUZZ_OUTPUT_DIR):/fuzz_output prism/fuzz ./fuzz/tools/triage.sh
 
-fuzz-docker-build: fuzz/docker/Dockerfile
-	$(ECHO) "building docker image"
-	$(Q) docker build -t prism/fuzz fuzz/docker/
 
-fuzz-run-%: FORCE fuzz-docker-build
+FUZZ_GEN_TEMPLATES_STAMP := ./build/.fuzz.gen_templates.stamp
+fuzz-gen-templates: $(FUZZ_GEN_TEMPLATES_STAMP)
+	$(ECHO) "Templates up to date"
+
+$(FUZZ_GEN_TEMPLATES_STAMP):
 	$(ECHO) "generating templates"
-	$(Q) bundle exec rake templates
-	$(ECHO) "running $* fuzzer"
-	$(Q) docker run --rm -v $(CURDIR):/prism prism/fuzz /bin/bash -c "FUZZ_FLAGS=\"$(FUZZ_FLAGS)\" make build/fuzz.$*"
+	$(Q) docker run --rm -v $(CURDIR):/prism prism/fuzz /bin/bash -c "bundle exec rake templates"
+	$(Q) $(MAKEDIRS) build
+	$(Q) touch $@
+
+fuzz-run: fuzz-docker-build fuzz-gen-templates
+	$(ECHO) "running fuzzer"
+	$(Q) docker run --rm -v $(CURDIR):/prism prism/fuzz /bin/bash -c "FUZZ_FLAGS=\"$(FUZZ_FLAGS)\" make build/fuzz.parse"
 	$(ECHO) "starting AFL++ run"
 	$(Q) $(MAKEDIRS) $(FUZZ_OUTPUT_DIR)/$*
-	$(Q) docker run -it --rm -v $(CURDIR):/prism -v $(FUZZ_OUTPUT_DIR):/fuzz_output prism/fuzz /bin/bash -c "./fuzz/$*.sh /fuzz_output/$*"
+	$(Q) docker run -it --rm -v $(CURDIR):/prism -v $(FUZZ_OUTPUT_DIR):/fuzz_output prism/fuzz /bin/bash -c "./fuzz/parse.sh /fuzz_output/parse"
 FORCE:
 
 fuzz-clean:
@@ -97,7 +114,7 @@ fuzz-clean:
 clean:
 	$(Q) $(RMALL) build
 
-.PHONY: clean fuzz-clean
+.PHONY: clean fuzz-clean fuzz-docker-build fuzz-gen-templates
 
 all-no-debug: DEBUG_FLAGS := -DNDEBUG=1
 all-no-debug: OPTFLAGS := -O3
